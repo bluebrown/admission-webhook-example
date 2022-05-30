@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admission-webhook
+  namespace: example
+spec:
+  selector:
+    matchLabels:
+      app: admission-webhook
+  template:
+    metadata:
+      labels:
+        app: admission-webhook
+        pod-injection: disabled
+    spec:
+      containers:
+        - name: admission-webhook
+          image: bluebrown/admission-webhook-example
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8443
+              name: https
+          volumeMounts:
+            - mountPath: /certs
+              name: certs
+              readOnly: true
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+      volumes:
+        - name: certs
+          secret:
+            secretName: admission-webhook

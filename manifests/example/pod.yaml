@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: busybox
+  namespace: example
+  labels:
+    name: busybox
+    inject-sidecar-example: enabled
+spec:
+  containers:
+    - name: busybox
+      image: busybox
+      command:
+        - sleep
+        - infinity
+      resources:
+        requests:
+          memory: "8Mi"
+          cpu: "1m"
+        limits:
+          memory: "64Mi"
+          cpu: "10m"
