@@ -1,134 +1,76 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
-	"flag"
-	"fmt"
-
+	"context"
 	"net/http"
-	"os"
 
-	"github.com/go-kit/log"
-	admissionv1 "k8s.io/api/admission/v1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
-var (
-	logger log.Logger
-)
-
-func init() {
-	w := log.NewSyncWriter(os.Stdout)
-	logger = log.NewLogfmtLogger(w)
-	logger = log.With(logger, "ts", log.DefaultTimestampUTC)
-}
+// based on https://github.com/kubernetes-sigs/controller-runtime/blob/v0.13.0/pkg/webhook/example_test.go
 
 func main() {
-	certpath := flag.String("cert", "certs/tls.crt", "path to the certificate")
-	keypath := flag.String("key", "certs/tls.key", "path to the key")
-	flag.Parse()
+	// create the webhook server
+	hookServer := &webhook.Server{
+		Port:    8443,
+		CertDir: "./certs",
+	}
 
-	http.HandleFunc("/inject-sidecar", handleInjectSidecar())
+	// register one or more webhooks
+	hookServer.Register("/annotate", asHook(annotate))
 
-	server := http.Server{Addr: ":8443"}
-	logger.Log("msg", "starting server", "tag", "startup", "addr", server.Addr)
+	// optionally start the metrics server
+	go metricsServer(":8080")
 
-	if err := server.ListenAndServeTLS(*certpath, *keypath); err != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, "ListenAndServe: %s\n", err)
-		os.Exit(1)
+	// start the webhooks server
+	err := hookServer.StartStandalone(signals.SetupSignalHandler(), scheme.Scheme)
+	if err != nil {
+		panic(err)
 	}
 }
 
-func handleInjectSidecar() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// decode the request body into a AdmissionReview struct
-		review := &admissionv1.AdmissionReview{}
-		json.NewDecoder(r.Body).Decode(review)
+// example mutating webhook
+func annotate(ctx context.Context, req webhook.AdmissionRequest) webhook.AdmissionResponse {
+	// create a basic patch response
+	res := webhook.Patched("annotating object",
+		webhook.JSONPatchOp{Operation: "add", Path: "/metadata/annotations/access", Value: "granted"},
+		webhook.JSONPatchOp{Operation: "add", Path: "/metadata/annotations/reason", Value: "not so secret"},
+	)
 
-		// log the request
-		requestLogger := log.With(logger, "request.uid", review.Request.UID)
-		requestLogger.Log("msg", "admission request received", "tag", "request", "operation", review.Request.Operation)
+	// do some more with it. i.e.  add warnings
+	res.Warnings = append(res.Warnings, "be careful, now!")
 
-		// prepare the response
-		response := &admissionv1.AdmissionResponse{}
+	// then return the final product
+	return res
+}
 
-		// get the pod object from the admission review
-		pod := &corev1.Pod{}
-		if err := json.NewDecoder(bytes.NewBuffer(review.Request.Object.Raw)).Decode(pod); err != nil {
-			requestLogger.Log("msg", "failed to decode pod object", "tag", "decode_failure", "error", err)
-			http.Error(w, "Failed to decode pod object", http.StatusBadRequest)
-			return
-		}
-
-		// to ensure idempotency, we need to check if the pod already has the sidecar
-		// in this example we check the name of the container
-		// in a real world scenario you would probably check the image of the container
-		// but this is a standard busybox image, so it doesn't make sense to check the image
-		for _, container := range pod.Spec.Containers {
-			if container.Name == "sidecar" {
-				requestLogger.Log("msg", "skipping sidecar injection", "tag", "skipping", "reason", "sidecar already exists", "pod.name", pod.Name)
-				response.Allowed = true
-				respond(w, r, review, response)
-				return
-			}
-		}
-
-		// create a patch to inject a sidecar into the pod
-		patch := []map[string]any{
-			{
-				"op":   "add",
-				"path": "/spec/containers/-",
-				"value": corev1.Container{
-					Name:    "sidecar",
-					Image:   "busybox",
-					Command: []string{"sleep", "infinity"},
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("1m"),
-							corev1.ResourceMemory: resource.MustParse("8Mi"),
-						},
-						Limits: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("10m"),
-							corev1.ResourceMemory: resource.MustParse("64Mi"),
-						},
-					},
-				},
-			},
-		}
-
-		// the patch should be a base64 encoded json string
-		b, err := json.Marshal(&patch)
-		if err != nil {
-			requestLogger.Log("msg", "failed to marshal patch", "tag", "encode_failure", "error", err)
-			http.Error(w, "Failed to marshal patch", http.StatusBadRequest)
-			return
-		}
-		// []byte is serialized as a base64 string
-		// so we only need to set the byte slice returned by json.Marshal
-		response.Patch = b
-		patchType := admissionv1.PatchTypeJSONPatch
-		response.PatchType = &patchType
-
-		// allow the pod to be admitted
-		response.Allowed = true
-		requestLogger.Log("msg", "sidecar injected", "tag", "injected", "pod.name", pod.Name)
-
-		// send the response
-		respond(w, r, review, response)
+// helper function to register a new webhook. This is only to reduce verbosity
+func asHook(handler func(ctx context.Context, req webhook.AdmissionRequest) webhook.AdmissionResponse) *admission.Webhook {
+	return &admission.Webhook{
+		Handler: admission.HandlerFunc(handler),
 	}
 }
 
-// wrap the response in a new admission review using the same metadata as the original as well as the request uid
-func respond(w http.ResponseWriter, r *http.Request, review *admissionv1.AdmissionReview, response *admissionv1.AdmissionResponse) {
-	// ensure the same UID is used for the response
-	response.UID = review.Request.UID
-	// content type is json
-	w.Header().Add("Content-Type", "application/json")
-	// set the same meta info and the response
-	json.NewEncoder(w).Encode(&admissionv1.AdmissionReview{
-		TypeMeta: review.TypeMeta,
-		Response: response,
-	})
+// initialize and start the metrics server.
+// panics if the listener cannot be created or
+// if the server could not start
+func metricsServer(addr string) {
+	metricsListener, err := metrics.NewListener(addr)
+	if err != nil {
+		panic(err)
+	}
+	s := http.Server{
+		Handler: promhttp.InstrumentMetricHandler(
+			metrics.Registry,
+			promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}),
+		),
+	}
+	if err := s.Serve(metricsListener); err != nil {
+		panic(err)
+	}
 }

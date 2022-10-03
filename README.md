@@ -12,4 +12,4 @@ kubectl delete namespace example
 
 ## Resources
 
-- https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/
+- <https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/>

@@ -1,16 +1,16 @@
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  name: example-sidecar-injector
+  name: example-annotator
 webhooks:
-  - name: sidecar-injector.bluebrown.github.io
+  - name: annotator.bluebrown.github.io
     clientConfig:
       # the cert is patched after the config is created
       # caBundle: ...
       service:
-        namespace: example
-        name: admission-webhook
-        path: /inject-sidecar
+        namespace: sandbox
+        name: admission-webhooks
+        path: /annotate
 
     admissionReviewVersions: ["v1"]
     sideEffects: None
@@ -24,12 +24,9 @@ webhooks:
       - apiGroups: [""]
         apiVersions: [v1]
         operations: [CREATE, UPDATE]
-        resources: [pods]
+        resources: ["configmaps"]
         scope: Namespaced
 
     objectSelector:
-      matchExpressions:
-        - key: inject-sidecar-example
-          operator: In
-          values:
-            - enabled
+      matchLabels:
+        webhooks-example: enabled

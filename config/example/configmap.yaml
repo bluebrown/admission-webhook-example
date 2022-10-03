@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: webhooks-example-cm
+  labels:
+    webhooks-example: enabled
+data:
+  key: value
