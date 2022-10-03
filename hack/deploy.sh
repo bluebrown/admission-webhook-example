@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 
+# NOTE:
+# by default the jobs are used so this script is not run
+# it is here for reference only.
+
+# use this, if you dont want to use the certgen jobs.
+# it shows the required steps to make the webhooks work.
+# the server must serve a certificate and the certificate
+# must be present in the webhooks config.
+
 set -euo pipefail
 
 CERT_PATH="${1:-./certs}"
-NAMESPACE="${2:-sandbox}"
+NAMESPACE="${2:-default}"
 SERVICE="${3:-admission-webhooks}"
 
 kubectl create secret tls "$SERVICE" \

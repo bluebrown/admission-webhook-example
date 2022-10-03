@@ -1,0 +1,9 @@
+# Note, this is meant to be used by higher level kustomizations,
+# i.e. the deploy directory. If you intend to use it, review
+# the deploy directory to see how to handle the target namespace
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - config.yaml
+  - deployment.yaml
+  - service.yaml

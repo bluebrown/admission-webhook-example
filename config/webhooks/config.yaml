@@ -4,29 +4,25 @@ metadata:
   name: example-annotator
 webhooks:
   - name: annotator.bluebrown.github.io
-    clientConfig:
-      # the cert is patched after the config is created
-      # caBundle: ...
-      service:
-        namespace: sandbox
-        name: admission-webhooks
-        path: /annotate
-
     admissionReviewVersions: ["v1"]
     sideEffects: None
     timeoutSeconds: 5
     reinvocationPolicy: IfNeeded
     failurePolicy: Fail
-
     matchPolicy: Equivalent
-
     rules:
       - apiGroups: [""]
         apiVersions: [v1]
         operations: [CREATE, UPDATE]
         resources: ["configmaps"]
         scope: Namespaced
-
     objectSelector:
       matchLabels:
         webhooks-example: enabled
+    clientConfig:
+      # the cert is patched after the config is created
+      # caBundle: ...
+      service:
+        namespace: default
+        name: admission-webhooks
+        path: /annotate

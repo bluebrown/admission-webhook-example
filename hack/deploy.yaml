@@ -1,0 +1,251 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sandbox
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  name: webhooks-certgen
+  namespace: sandbox
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: webhooks-certgen
+  namespace: sandbox
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: webhooks-certgen
+rules:
+- apiGroups:
+  - admissionregistration.k8s.io
+  resourceNames:
+  - example-annotator
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - get
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: webhooks-certgen
+  namespace: sandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: webhooks-certgen
+subjects:
+- kind: ServiceAccount
+  name: webhooks-certgen
+  namespace: sandbox
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: webhooks-certgen
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: webhooks-certgen
+subjects:
+- kind: ServiceAccount
+  name: webhooks-certgen
+  namespace: sandbox
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admission-webhooks
+  namespace: sandbox
+spec:
+  ports:
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: https
+  - name: metrics
+    port: 8080
+    protocol: TCP
+    targetPort: metrics
+  selector:
+    app: admission-webhooks
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admission-webhooks
+  namespace: sandbox
+spec:
+  selector:
+    matchLabels:
+      app: admission-webhooks
+  template:
+    metadata:
+      labels:
+        app: admission-webhooks
+    spec:
+      containers:
+      - image: bluebrown/admission-webhooks-example
+        imagePullPolicy: Always
+        name: admission-webhooks
+        ports:
+        - containerPort: 8443
+          name: https
+        - containerPort: 8080
+          name: metrics
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 16Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - mountPath: /certs
+          name: certs
+          readOnly: true
+      securityContext:
+        runAsNonRoot: true
+      volumes:
+      - name: certs
+        secret:
+          secretName: admission-webhooks
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: webhooks-cert-create
+  namespace: sandbox
+spec:
+  template:
+    spec:
+      containers:
+      - args:
+        - create
+        - --host=admission-webhooks.$(POD_NAMESPACE).svc
+        - --namespace=$(POD_NAMESPACE)
+        - --secret-name=admission-webhooks
+        - --key-name=tls.key
+        - --cert-name=tls.crt
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v20220916-gd32f8c343
+        name: create
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 25m
+            memory: 16Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 2000
+        runAsNonRoot: true
+        runAsUser: 2000
+      serviceAccount: webhooks-certgen
+  ttlSecondsAfterFinished: 120
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: webhooks-cert-patch
+  namespace: sandbox
+spec:
+  template:
+    spec:
+      containers:
+      - args:
+        - patch
+        - --webhook-name=example-annotator
+        - --namespace=$(POD_NAMESPACE)
+        - --secret-name=admission-webhooks
+        - --patch-mutating=true
+        - --patch-validating=false
+        - --patch-failure-policy=Fail
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v20220916-gd32f8c343
+        name: patch
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 25m
+            memory: 16Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 2000
+        runAsNonRoot: true
+        runAsUser: 2000
+      serviceAccount: webhooks-certgen
+  ttlSecondsAfterFinished: 120
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: example-annotator
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: admission-webhooks
+      namespace: sandbox
+      path: /annotate
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: annotator.bluebrown.github.io
+  objectSelector:
+    matchLabels:
+      webhooks-example: enabled
+  reinvocationPolicy: IfNeeded
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - configmaps
+    scope: Namespaced
+  sideEffects: None
+  timeoutSeconds: 5

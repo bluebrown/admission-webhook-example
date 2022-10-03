@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: admission-webhooks
-  namespace: sandbox
+  namespace: default
 spec:
   selector:
     matchLabels:
@@ -11,7 +11,6 @@ spec:
     metadata:
       labels:
         app: admission-webhooks
-        pod-injection: disabled
     spec:
       securityContext:
         runAsNonRoot: true
@@ -32,6 +31,7 @@ spec:
               cpu: "100m"
               memory: "128Mi"
           securityContext:
+            allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL

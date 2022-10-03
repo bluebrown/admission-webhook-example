@@ -17,6 +17,9 @@ help: ## Display this help.
 
 ##@ Build
 
+.PHONY: all
+all: build push ## Build and push
+
 .PHONY: build
 build: ## Build the container image
 	docker build -t $(IMAGE_REGISTRY)/$(IMAGE_REPOSITORY) .
@@ -29,21 +32,28 @@ push: ## Push the container image to the image registry
 ##@ Deployment
 
 .PHONY: install
-install: gencert ## Deploy the webhook server and patch the pod and webhook config with a cert
-	@./hack/deploy.sh $(certpath) $(namespace) $(service)
+configure: ## Configure the namespace of the kustomization. i.e. make configure namespace=foo
+	@cd config/deploy/ && kustomize edit set namespace $(namespace)
+
+.PHONY: install
+install: configure ## Deploy the webhook server and patch the pod and webhook config with a cert
+	@kustomize build config/deploy/ | kubectl apply -f -
 
 .PHONY: uninstall
-uninstall: ## Remove the kubernetes resources
-	kubectl delete -R -f config/ --ignore-not-found
+uninstall: ## Remove the kubernetes resources (does NOT remove the namespace)
+	@@kustomize build config/deploy/ | kubectl delete --ignore-not-found -f -
+
+
+##@ Development
 
 .PHONY: gencert
-gencert:  ## Generate a new certificate used for the webhooks
+gencert:  ## Generate a new certificate used for the webhooks. Useful for local development
 	./hack/gencert.sh $(certpath) $(namespace) $(service)
 
 .PHONY: example
-example: ## Deploy a sample configmap to see the webhooks in action
-	kubectl apply -f config/example/
+example-apply: ## Deploy a sample configmap to see the webhooks in action
+	kubectl apply -f hack/example-cm.yaml
 
 .PHONY: clean
-clean: uninstall ## Clean up all the kubernetes resources, including example
-	kubectl delete secret/admission-webhook --ignore-not-found
+example-delete: ## Clean up the example example
+	kubectl delete --ignore-not-found -f hack/example-cm.yaml
