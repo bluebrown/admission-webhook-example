@@ -15,7 +15,7 @@ func TestAdmission(t *testing.T) {
 	req := httptest.NewRequest("POST", "/annotate", bytes.NewReader([]byte(reviewJson)))
 	req.Header.Set("Content-Type", "application/json")
 
-	handler, err := admission.StandaloneWebhook(asHook(annotate), admission.StandaloneOptions{})
+	handler, err := admission.StandaloneWebhook(asHook(annotate, "annotate"), admission.StandaloneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

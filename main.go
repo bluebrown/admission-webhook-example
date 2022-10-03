@@ -3,18 +3,23 @@ package main
 import (
 	"context"
 	"net/http"
+	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
-// based on https://github.com/kubernetes-sigs/controller-runtime/blob/v0.13.0/pkg/webhook/example_test.go
-
 func main() {
+	// setup logging using klog
+	log.SetLogger(klog.NewKlogr())
+
 	// create the webhook server
 	hookServer := &webhook.Server{
 		Port:    8443,
@@ -22,7 +27,7 @@ func main() {
 	}
 
 	// register one or more webhooks
-	hookServer.Register("/annotate", asHook(annotate))
+	hookServer.Register("/annotate", asHook(annotate, "annotate"))
 
 	// optionally start the metrics server
 	go metricsServer(":8080")
@@ -49,10 +54,43 @@ func annotate(ctx context.Context, req webhook.AdmissionRequest) webhook.Admissi
 	return res
 }
 
-// helper function to register a new webhook. This is only to reduce verbosity
-func asHook(handler func(ctx context.Context, req webhook.AdmissionRequest) webhook.AdmissionResponse) *admission.Webhook {
-	return &admission.Webhook{
-		Handler: admission.HandlerFunc(handler),
+// convert a handler to a webhook adding some basic logging
+func asHook(handler func(ctx context.Context, req webhook.AdmissionRequest) webhook.AdmissionResponse, name string) *admission.Webhook {
+	l := log.Log.WithName("webhooks/" + name)
+	wh := &admission.Webhook{
+		Handler:      admission.HandlerFunc(loggingMiddleware(l)(handler)),
+		RecoverPanic: false,
+	}
+	wh.InjectLogger(l)
+	return wh
+}
+
+// types to create middleware
+type handleFunc func(ctx context.Context, r admission.Request) admission.Response
+type middleware func(handleFunc) handleFunc
+
+// logging middleware that logs information about request and response,
+// after the request was handled
+func loggingMiddleware(logger logr.Logger) middleware {
+	return func(handler handleFunc) handleFunc {
+		return func(ctx context.Context, r admission.Request) (res admission.Response) {
+			defer func(ts time.Time) {
+				logger.Info("request_handled",
+					"uid", r.UID,
+					"allowed", res.Allowed,
+					"operation", r.Operation,
+					"group", r.Kind.Group,
+					"version", r.Kind.Version,
+					"kind", r.Kind.Kind,
+					"name", r.Name,
+					"namespace", r.Namespace,
+					"elapsed", time.Since(ts),
+					"dryrun", *r.DryRun,
+				)
+			}(time.Now())
+			res = handler(ctx, r)
+			return res
+		}
 	}
 }
 
